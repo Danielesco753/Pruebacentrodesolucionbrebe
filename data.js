@@ -282,7 +282,7 @@ const FORMS = {
         { type: "template", id: "plantilla", file: "Reporte_llaves_masivo.xlsx" },
         { type: "select", id: "ambiente", label: "Elige el ambiente", requerido: true, options: OPT_AMBIENTE },
         { type: "textarea", id: "problema", label: "¿Cuéntanos tu problema?", requerido: true, maxLength: 2000 },
-        { type: "file", id: "adjunto", label: "Adjuntar plantilla", requerido: true, accept: ".xls,.xlsx", acceptLabel: "XLS, XLSX", max: 1 }
+        { type: "file", id: "adjunto", label: "Adjuntar plantilla", requerido: true, accept: ".xls,.xlsx", acceptLabel: "XLS, XLSX", max: 1, scan: true }
       ]
     }
   },
@@ -316,7 +316,7 @@ const FORMS = {
         { type: "template", id: "plantilla", file: "Usuarios_y_accesos.xlsx" },
         { type: "select", id: "ambiente", label: "Elige el ambiente", requerido: true, options: OPT_AMBIENTE },
         { type: "textarea", id: "problema", label: "¿Cuéntanos tu problema?", requerido: true, maxLength: 2000 },
-        { type: "file", id: "adjunto", label: "Adjuntar plantilla", requerido: true, accept: ".xls,.xlsx", acceptLabel: "XLS, XLSX", max: 1 }
+        { type: "file", id: "adjunto", label: "Adjuntar plantilla", requerido: true, accept: ".xls,.xlsx", acceptLabel: "XLS, XLSX", max: 1, scan: true }
       ]
     }
   },
@@ -362,7 +362,7 @@ const FORMS = {
       Masiva: [
         { type: "template", id: "plantilla", file: "Conciliación_Masivo.xlsx" },
         { type: "textarea", id: "problema", label: "¿Cuéntanos tu problema?", requerido: true, maxLength: 2000 },
-        { type: "file", id: "adjunto", label: "Adjuntar plantilla", requerido: true, accept: ".xls,.xlsx", acceptLabel: "XLS, XLSX", max: 1 }
+        { type: "file", id: "adjunto", label: "Adjuntar plantilla", requerido: true, accept: ".xls,.xlsx", acceptLabel: "XLS, XLSX", max: 1, scan: true }
       ]
     }
   },
@@ -396,7 +396,7 @@ const FORMS = {
         { type: "template", id: "plantilla", file: "Reporte_TRX_Masivo.xlsx" },
         { type: "select", id: "ambiente", label: "Elige el ambiente", requerido: true, options: OPT_AMBIENTE },
         { type: "textarea", id: "problema", label: "¿Cuéntanos tu problema?", requerido: true, maxLength: 2000 },
-        { type: "file", id: "adjunto", label: "Adjuntar plantilla", requerido: true, accept: ".xls,.xlsx", acceptLabel: "XLS, XLSX", max: 1 }
+        { type: "file", id: "adjunto", label: "Adjuntar plantilla", requerido: true, accept: ".xls,.xlsx", acceptLabel: "XLS, XLSX", max: 1, scan: true }
       ]
     }
   }

@@ -7,6 +7,220 @@
   const $  = (sel, ctx = document) => ctx.querySelector(sel);
   const $$ = (sel, ctx = document) => Array.from(ctx.querySelectorAll(sel));
 
+  /* ============================================================
+     MAZE · Etiquetado de interacciones + slugs (#/ruta)
+     ------------------------------------------------------------
+     1) SLUGS: cada pantalla, popup, menú desplegable o drawer cambia
+        la URL (#/crear-solicitud/..., #/consultar-estado/...) y el
+        <title>, para que Maze lo registre como una pantalla/proceso
+        nuevo y genere su mapa de calor.
+          MZ.screen(path)  → pantalla nueva (cambia la "base")
+          MZ.sub(suffix)   → overlay relativo a la base (popup, menú)
+          MZ.overlay(path) → overlay con ruta absoluta (drawer)
+          MZ.back()        → vuelve a la ruta base
+     2) ETIQUETAS: todo elemento interactivo recibe automáticamente
+          id="mz-<ámbito>__<tipo>__<nombre>"   (selector #id para Maze)
+          data-maze, data-maze-type, data-maze-hover
+        Se aplica al cargar y a todo lo que se renderice después
+        (formularios, popups, tabla, drawer) mediante MutationObserver.
+        Consola: mazeTagMap() lista todas las etiquetas de la pantalla.
+     ============================================================ */
+  const MZ = (function () {
+    const APP = "Credibanco · Bre-B";
+    let base = "crear-solicitud";
+    let baseTitle = "Crear solicitud";
+
+    const slug = (s) => String(s == null ? "" : s)
+      .toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
+
+    // Estado lógico del dashboard (lo leen los marcadores data-maze-* del <body>)
+    const state = { form: "", variant: "" };
+    let current = "";            // ruta lógica actual (pantalla + overlay)
+    let lastSet = location.hash; // último hash escrito por la app → distingue Atrás/Adelante del usuario
+    let silent = false;          // true mientras se restaura una ruta desde el historial
+    let navHandler = null;
+
+    /* ---------- Registro de interacciones (separado de la URL) ----------
+       Cada evento lleva pantalla, overlay, etiqueta (#id / data-maze) y tipo.
+       No se guardan valores escritos por el usuario (solo opciones de listas).
+       Salida: window.mazeInteractions (array) y el evento "maze:interaction". */
+    const logArr = (window.mazeInteractions = window.mazeInteractions || []);
+    function track(type, el, extra) {
+      const host = el && el.closest ? el.closest("[data-maze]") : null;
+      const entry = Object.assign({
+        t: new Date().toISOString(),
+        type: type,
+        screen: base,
+        path: current,
+        tag: host ? host.dataset.maze : null,
+        id: host ? host.id : null,
+        kind: host ? host.dataset.mazeType : null
+      }, extra || {});
+      logArr.push(entry);
+      if (logArr.length > 500) logArr.shift();
+      window.dispatchEvent(new CustomEvent("maze:interaction", { detail: entry }));
+    }
+
+    // Refleja el estado en el <body> y la cuadrícula (marcadores dinámicos del index)
+    function mark(title) {
+      document.title = title ? APP + " · " + title : APP;
+      const b = document.body;
+      b.dataset.mazeScreen = base;
+      b.dataset.mazeOverlay = current === base ? "" : (current.indexOf(base + "/") === 0 ? current.slice(base.length + 1) : current);
+      b.dataset.mazeView = base.indexOf("consultar-estado") === 0 ? "consultar" : "crear";
+      b.dataset.mazeForm = state.form;
+      b.dataset.mazeVariant = state.variant;
+      const g = document.getElementById("solutionGrid");
+      if (g) g.dataset.mazeState = b.dataset.mazeView === "consultar" ? "consulta" : (state.form ? "formulario" : "seleccion");
+    }
+
+    // replace=true → no agrega entrada al historial (overlays); false → pantalla nueva
+    function put(path, title, replace) {
+      current = path;
+      mark(title);
+      track("screen", null, { to: path, via: silent ? "historial" : "ui" });
+      if (silent) return;                     // restaurando: la URL ya es la correcta
+      const hash = "#/" + path;
+      if (location.hash === hash) return;
+      lastSet = hash;                         // marca el cambio como propio de la app
+      if (replace) location.replace(hash);    // cambia la URL sin ensuciar el historial
+      else location.hash = hash;              // nueva entrada → el botón Atrás vuelve aquí
+    }
+
+    /* ---------- Etiquetador automático ---------- */
+    const INTERACTIVE = 'button, a[href], input, select, textarea, [role="button"], [role="menuitem"], .data-row, .acc-option, .acc-head';
+    const BANNERS = '.welcome-hero, .template-note, .empty-state, .consulta-empty';
+    const SECTIONS = '.stat-group, .stat, .table-wrap, .pager, .drawer__card, .drawer__dates, .timeline__item, .dropzone, .filters, .search, .consulta__toolbar, .sidebar, .app-header, .welcome-panel, .detail-panel, .detail-content__body';
+    const HOVERABLE = 'button, a[href], .acc-option, .acc-head, .data-row, .nav-item, .nav-subitem, .stat, .dropzone, .attach, .notif-item, .dropdown__item, .chip, .filter-btn, .search__btn';
+
+    function typeOf(el) {
+      if (el.matches("select")) return "dropdown";
+      if (el.matches('input[type="file"]')) return "upload";
+      if (el.matches("input, textarea")) return "input";
+      if (el.matches(".data-row")) return "table-row";
+      if (el.matches(".acc-head, .nav-item--parent, [aria-haspopup]")) return "dropdown-toggle";
+      if (el.closest(".modal")) return "popup-action";
+      if (el.matches("a")) return "link";
+      return "button";
+    }
+
+    function labelOf(el) {
+      const d = el.dataset;
+      let t = d.mazeLabel || el.getAttribute("aria-label") || d.optId || d.template || d.chip || d.download || d.file || d.ticket || d.view || "";
+      if (!t && (el.type === "radio" || el.type === "checkbox")) t = (el.name || "") + "-" + (el.value || "");
+      if (!t && el.id && el.id.indexOf("mz-") !== 0) t = el.id;
+      if (!t && el.matches("input, select, textarea")) {
+        const lb = el.id && document.querySelector('label[for="' + el.id + '"]');
+        t = (lb && lb.textContent) || el.placeholder || el.name || el.type || "";
+      }
+      if (!t) t = (el.textContent || "").replace(/\s+/g, " ").trim().slice(0, 40);
+      if (!t) t = String(el.className || "").split(" ")[0] || el.tagName;
+      return slug(t);
+    }
+
+    function tag(el, kind) {
+      if (el.dataset.maze) return;
+      const holder = el.closest("[data-mz-scope]");
+      const scope = holder ? holder.dataset.mzScope : "app";
+      const key = scope + "__" + kind + "__" + labelOf(el);
+      el.setAttribute("data-maze", key);
+      el.setAttribute("data-maze-type", kind);
+      if (!el.id) {
+        let id = "mz-" + key, n = 1;
+        while (document.getElementById(id)) id = "mz-" + key + "-" + (++n);
+        el.id = id;
+      }
+      if (el.matches(HOVERABLE)) el.setAttribute("data-maze-hover", "true");
+    }
+
+    function run(root) {
+      root = root || document.body;
+      root.querySelectorAll(INTERACTIVE).forEach((el) => tag(el, typeOf(el)));
+      root.querySelectorAll(BANNERS).forEach((el) => tag(el, "banner"));
+      root.querySelectorAll(SECTIONS).forEach((el) => tag(el, "section"));
+      // Opciones de los menús desplegables nativos
+      root.querySelectorAll("select").forEach((sel) => {
+        sel.querySelectorAll("option").forEach((o) => {
+          if (o.dataset.maze) return;
+          o.setAttribute("data-maze", (sel.dataset.maze || sel.id) + "__opcion__" + slug(o.value || o.textContent));
+          o.setAttribute("data-maze-type", "option");
+        });
+      });
+    }
+
+    return {
+      slug,
+      formPath: "crear-solicitud",
+      run,
+      state,
+      track,
+      // Pantalla nueva: agrega entrada al historial (opts.replace la sustituye, p. ej. en la carga inicial)
+      screen(path, title, opts) { base = path; baseTitle = title || baseTitle; put(base, baseTitle, !!(opts && opts.replace)); },
+      // Overlays (popup, menú, drawer): cambian la URL sin crear entradas de historial
+      overlay(path, title) { put(path, title, true); },
+      sub(suffix, title) { put(base + "/" + suffix, (baseTitle ? baseTitle + " · " : "") + (title || suffix), true); },
+      back() { put(base, baseTitle, true); },
+      // Restauración desde el historial (Atrás/Adelante): la UI se actualiza sin reescribir la URL
+      beginRoute() { silent = true; },
+      endRoute() {
+        silent = false;
+        const h = "#/" + current;
+        lastSet = h;
+        if (current && location.hash !== h) location.replace(h);   // la URL refleja lo que realmente se muestra
+      },
+      onNavigate(fn) { navHandler = fn; },
+      init() {
+        window.addEventListener("hashchange", () => {
+          if (location.hash === lastSet) return;       // cambio hecho por la propia app
+          lastSet = location.hash;                     // el usuario usó Atrás/Adelante o editó la URL
+          if (navHandler) navHandler(location.hash.replace(/^#\/?/, ""));
+        });
+        run();
+        let pending = false;
+        new MutationObserver(() => {
+          if (pending) return;
+          pending = true;
+          requestAnimationFrame(() => { pending = false; run(); });
+        }).observe(document.body, { childList: true, subtree: true });
+        // Refleja la opción elegida en cada desplegable (útil al revisar grabaciones)
+        document.addEventListener("change", (e) => {
+          if (e.target.matches && e.target.matches("select")) e.target.setAttribute("data-maze-selected", e.target.value);
+        });
+        // Registro de interacciones: clic, cambio de lista, foco, hover sostenido
+        document.addEventListener("click", (e) => track("click", e.target), true);
+        document.addEventListener("change", (e) => {
+          const t = e.target;
+          if (!t.matches) return;
+          if (t.matches("select")) track("select", t, { value: t.value });
+          else if (t.matches('input[type="file"]')) track("upload", t, { files: t.files ? t.files.length : 0 });
+          else if (t.matches('input[type="radio"], input[type="checkbox"]')) track("toggle", t, { value: t.value });
+          else if (t.matches("input, textarea")) track("input", t);      // sin guardar lo escrito
+        }, true);
+        document.addEventListener("focusin", (e) => {
+          if (e.target.matches && e.target.matches("input, select, textarea")) track("focus", e.target);
+        });
+        let hoverEl = null, hoverTimer = null;
+        document.addEventListener("mouseover", (e) => {
+          const h = e.target.closest ? e.target.closest("[data-maze-hover]") : null;
+          if (h === hoverEl) return;
+          clearTimeout(hoverTimer);
+          hoverEl = h;
+          if (h) hoverTimer = setTimeout(() => track("hover", h), 600);   // hover sostenido (≥0,6 s)
+        });
+        document.addEventListener("mouseout", (e) => {
+          if (hoverEl && !(e.relatedTarget && hoverEl.contains(e.relatedTarget))) { clearTimeout(hoverTimer); hoverEl = null; }
+        });
+        // Utilidad de consola: lista todas las etiquetas de la pantalla actual
+        window.mazeTagMap = function () {
+          return Array.from(document.querySelectorAll("[data-maze]")).map((e) => ({
+            id: e.id, tag: e.dataset.maze, type: e.dataset.mazeType, hover: !!e.dataset.mazeHover, slug: location.hash
+          }));
+        };
+      }
+    };
+  })();
+
   /* ---------- Estado ---------- */
   let currentView = "crear";       // "crear" | "consultar"
   let activeCategoryId = null;     // categoría de acordeón abierta
@@ -46,6 +260,13 @@
     modal.classList.remove("modal--filters");
     modalDialog.className = "modal__dialog";
     modalDialog.innerHTML = MODAL_BASE;   // siempre partimos del diálogo estándar
+    // Maze: cada popup es una "pantalla" propia (slug + ámbito de etiquetas)
+    const mzSlug = cfg.slug || MZ.slug(cfg.title);
+    modal.dataset.mzScope = "popup-" + mzSlug;
+    modalDialog.id = "mz-popup-" + mzSlug;
+    modalDialog.setAttribute("data-maze", "popup__" + mzSlug);
+    modalDialog.setAttribute("data-maze-type", "popup");
+    MZ.sub(mzSlug, cfg.title);
     modalDialog.querySelector("#modalIcon").innerHTML = cfg.icon || "";
     modalDialog.querySelector("#modalTitle").textContent = cfg.title || "";
     modalDialog.querySelector("#modalText").innerHTML = cfg.text || "";
@@ -60,9 +281,11 @@
     });
     modal.hidden = false;
   }
-  function closeModal() {
+  // silent === true → no vuelve al slug base (se usa cuando se navega a otra pantalla justo después)
+  function closeModal(silent) {
     modal.hidden = true;
     modal.classList.remove("modal--filters");
+    if (silent !== true) MZ.back();
   }
 
   // Cerrar con Escape; el overlay NO cierra (para no perder el contexto accidentalmente)
@@ -80,16 +303,22 @@
       closeAllDropdowns();
       root.classList.toggle("open", willOpen);
       trigger.setAttribute("aria-expanded", String(willOpen));
+      if (willOpen) {
+        MZ.sub(root.id === "notifDropdown" ? "menu-notificaciones" : "menu-perfil",
+               root.id === "notifDropdown" ? "Menú notificaciones" : "Menú perfil");
+      }
     });
     // Evita cerrar al hacer click dentro del panel
     root.querySelector(".dropdown__panel").addEventListener("click", (e) => e.stopPropagation());
   }
   function closeAllDropdowns() {
+    const anyOpen = $$(".dropdown.open").length > 0;
     $$(".dropdown.open").forEach((d) => {
       d.classList.remove("open");
       const t = d.querySelector("button");
       if (t) t.setAttribute("aria-expanded", "false");
     });
+    if (anyOpen) MZ.back();
   }
   setupDropdown("notifDropdown");
   setupDropdown("profileDropdown");
@@ -152,11 +381,14 @@
     sidebar.classList.add("is-open");
     overlay.hidden = false;
     menuToggle.setAttribute("aria-expanded", "true");
+    MZ.sub("menu-movil", "Menú móvil");
   }
   function closeMobileSidebar() {
+    const wasOpen = sidebar.classList.contains("is-open");
     sidebar.classList.remove("is-open");
     overlay.hidden = true;
     menuToggle.setAttribute("aria-expanded", "false");
+    if (wasOpen) MZ.back();
   }
   menuToggle.addEventListener("click", () => {
     sidebar.classList.contains("is-open") ? closeMobileSidebar() : openMobileSidebar();
@@ -215,6 +447,11 @@
         } else {
           activeCategoryId = null;
         }
+        // Maze: categoría desplegada = pantalla propia (si no hay un formulario abierto)
+        if (!activeOptionId) {
+          if (willOpen) MZ.screen("crear-solicitud/categoria/" + MZ.slug(item.dataset.catId), "Categoría " + head.textContent.trim());
+          else MZ.screen("crear-solicitud", "Crear solicitud");
+        }
       });
     });
 
@@ -263,6 +500,11 @@
     renderCreateForm(found.cat, found.opt);
     showDetail();
     closeMobileSidebar();
+    // Maze: cada subcategoría/formulario tiene su propio slug
+    MZ.state.form = optId;
+    MZ.state.variant = "";
+    MZ.formPath = "crear-solicitud/" + MZ.slug(catId) + "/" + MZ.slug(optId);
+    MZ.screen(MZ.formPath, found.opt.form + " · " + found.opt.label);
   }
 
   /* ---------- Helpers de render de campos ---------- */
@@ -312,7 +554,7 @@
       case "file":
         return `<div class="field" data-field="${f.id}">
           <label>${esc(f.label)}${reqMark(req)}</label>
-          <div class="dropzone" data-dropzone data-max="${f.max||3}" data-accept="${f.accept||""}" data-req="${req}">
+          <div class="dropzone" data-dropzone data-max="${f.max||3}" data-accept="${f.accept||""}" data-req="${req}" ${f.scan?'data-scan="true"':''}>
             <input type="file" id="f-${f.id}" class="dropzone__input" ${f.max>1?"multiple":""} accept="${f.accept||""}" hidden />
             <div class="dropzone__top">
               <span class="dropzone__icon">${SVG_UPLOAD}</span>
@@ -347,7 +589,7 @@
           <div class="timerange" data-timerange data-req="${req}">
             <input type="text" id="f-${f.id}" class="timerange__input" placeholder="HH:MM – HH:MM" readonly data-req="${req}" />
             <span class="input-icon__btn timerange__ic">${SVG_CLOCK}</span>
-            <div class="timepop" hidden>
+            <div class="timepop" data-mz-scope="rango-hora" hidden>
               <div class="timepop__row">
                 <div class="timepop__col">
                   <span class="timepop__lbl">Hora inicial</span>
@@ -401,6 +643,7 @@
       return;
     }
 
+    detailBody.dataset.mzScope = "form-" + MZ.slug(opt.id);   // ámbito de etiquetas Maze
     const hasVariants = !!def.variants;
     let bodyHTML = "";
 
@@ -436,6 +679,10 @@
       const container = $("[data-variant-container]", detailBody);
       sel.addEventListener("change", () => {
         const key = sel.value;
+        // Maze: Unitaria / Masiva son pantallas distintas del mismo formulario
+        detailBody.dataset.mzScope = "form-" + MZ.slug(opt.id) + (key ? "-" + MZ.slug(key) : "");
+        MZ.state.variant = key ? MZ.slug(key) : "";
+        MZ.screen(MZ.formPath + (key ? "/" + MZ.slug(key) : ""), opt.form + " · " + opt.label + (key ? " · " + key : ""));
         container.innerHTML = key && def.variants[key]
           ? def.variants[key].map(fieldHTML).join("")
           : "";
@@ -447,12 +694,18 @@
     wireFields(detailBody);
 
     // Cancelar
-    $("#cancelBtn", detailBody).addEventListener("click", resetDetail);
+    $("#cancelBtn", detailBody).addEventListener("click", () => {
+      resetDetail();
+      MZ.screen("crear-solicitud", "Crear solicitud");
+    });
 
     // Enviar → flujo de confirmación / resultado
     form.addEventListener("submit", (e) => {
       e.preventDefault();
-      if (!validateForm(form)) return;      // campos obligatorios primero
+      if (!validateForm(form)) {            // campos obligatorios primero
+        MZ.sub("campos-obligatorios", "Campos obligatorios pendientes");
+        return;
+      }
       confirmAndSubmit(opt);
     });
   }
@@ -465,6 +718,7 @@
   function confirmAndSubmit(opt) {
     openModal({
       icon: ICON_WARN,
+      slug: "confirmar-envio",
       title: "¿Confirmas la creación de tu solicitud?",
       text: "",
       actions: [
@@ -511,11 +765,12 @@
       });
       openModal({
         icon: ICON_OK,
+        slug: "solicitud-exitosa",
         title: "Tu solicitud fue creada exitosamente",
         text: `Puedes hacer seguimiento a tu solicitud con el <strong>Ticket #${ticket}</strong> que encontrarás en consultar estado.<br><br>Fecha estimada de solución<br><strong>${fecha}</strong>`,
         actions: [
           { label: "Entendido", onClick: () => {
-              closeModal();
+              closeModal(true);           // la siguiente pantalla (consultar estado) fija el slug
               resetDetail();              // limpia y vuelve al estado inicial
               goToConsultar();            // lleva a "Consultar estado" como en el flujo
           } }
@@ -524,6 +779,7 @@
     } else {
       openModal({
         icon: ICON_ERR,
+        slug: "solicitud-con-error",
         title: "Tu solicitud no pudo ser creada",
         text: "Vuelve a intentarlo más tarde",
         actions: [
@@ -617,9 +873,11 @@
     const openPop = () => {
       // Cierra otros popovers abiertos
       $$(".timepop", detailBody).forEach(p => { if (p !== pop) p.hidden = true; });
+      if (pop.hidden) MZ.sub("rango-hora", "Selector de rango de hora");
       pop.hidden = false;
     };
-    const closePop = () => { pop.hidden = true; };
+    // Solo vuelve al slug base si el selector estaba realmente abierto
+    const closePop = () => { if (!pop.hidden) { pop.hidden = true; MZ.back(); } };
 
     input.addEventListener("click", openPop);
     icon.addEventListener("click", openPop);
@@ -679,14 +937,20 @@
       return accept.some(ext => name.endsWith(ext));
     }
 
+    const needsScan = zone.dataset.scan === "true";
+
     function add(incoming) {
+      let added = null;
       for (const f of incoming) {
         if (files.length >= max) { showToast(`Máximo ${max} archivo(s)`); break; }
         if (!accepts(f)) { showToast(`Formato no permitido: ${f.name}`); continue; }
         files.push(f);
+        added = f;
       }
       render();
       clearError(input);
+      // Validación IA de la plantilla masiva recién cargada
+      if (needsScan && added) scanTemplate(zone, added);
     }
 
     // Abre el selector solo si no se alcanzó el máximo
@@ -707,6 +971,69 @@
     ["dragenter","dragover"].forEach(ev => zone.addEventListener(ev, (e)=>{ e.preventDefault(); zone.classList.add("is-drag"); }));
     ["dragleave","drop"].forEach(ev => zone.addEventListener(ev, (e)=>{ e.preventDefault(); zone.classList.remove("is-drag"); }));
     zone.addEventListener("drop", (e) => { if (e.dataTransfer?.files) add(Array.from(e.dataTransfer.files)); });
+  }
+
+  /* ============================================================
+     ESCANEO IA · Validación de plantilla masiva (Excel)
+     1. Popup "Validando documentos" (spinner ~2s).
+     2. Favorable: se cierra el popup y el archivo queda montado (sin mensaje).
+     3. Error: popup "Se presentó un error en el archivo" con descarga del
+        reporte de errores y opción de volver a cargar.
+     Simulación: ~40% de los archivos fallan (aleatorio). Además, si el
+     nombre contiene "ok" siempre pasa y si contiene "error" siempre falla,
+     para poder forzar cada caso en una demo.
+     ============================================================ */
+  const ICON_SPINNER = `<svg class="spin" viewBox="0 0 48 48" width="52" height="52"><circle cx="24" cy="24" r="20" fill="none" stroke="#e3f1ef" stroke-width="5"/><path d="M24 4a20 20 0 0 1 20 20" fill="none" stroke="#16a79a" stroke-width="5" stroke-linecap="round"/></svg>`;
+
+  function scanTemplate(zone, file) {
+    openModal({
+      icon: ICON_SPINNER,
+      slug: "validando-plantilla",
+      title: "Validando documentos",
+      text: "Estamos revisando tu información. Esto puede tardar unos segundos.",
+      actions: []            // sin botones mientras valida
+    });
+
+    const name = (file && file.name ? file.name : "").toLowerCase();
+    let ok;
+    if (name.includes("error")) ok = false;
+    else if (name.includes("ok")) ok = true;
+    else ok = Math.random() > 0.4;   // ~40% de los archivos fallan
+
+    setTimeout(() => {
+      if (ok) {
+        closeModal();               // favorable: queda montado, sin mensaje
+        return;
+      }
+      // Error: permite descargar el reporte y volver a cargar
+      openModal({
+        icon: ICON_ERR,
+        slug: "error-plantilla",
+        title: "Se presentó un error en el archivo",
+        text: `Puedes avanzar pero recuerda cargar los documentos pendientes o puedes descargar el siguiente archivo donde te indicamos cuáles son los errores.<br><a href="#" class="modal__link" data-errfile>Archivoconerrores.xls</a>`,
+        actions: [
+          { label: "Volver", variant: "ghost", onClick: () => {
+              // Quita el archivo rechazado para volver a cargar
+              zone._files.length = 0;
+              const list = zone.querySelector("[data-filelist]"); if (list) list.innerHTML = "";
+              const bar = zone.querySelector("[data-bar]"); if (bar) bar.style.width = "0%";
+              const addBtn = zone.querySelector("[data-add]"); if (addBtn) addBtn.disabled = false;
+              closeModal();
+          } },
+          { label: "Continuar", onClick: closeModal }   // deja el archivo y sigue
+        ]
+      });
+      const link = modalDialog.querySelector("[data-errfile]");
+      if (link) link.addEventListener("click", (e) => {
+        e.preventDefault();
+        const blob = new Blob(
+          ["Reporte de errores de la plantilla\n\nFila 3 · columna 'Llave': valor vacío\nFila 7 · columna 'Fecha': formato inválido (use DD/MM/AAAA)\nFila 12 · columna 'Valor': debe ser numérico"],
+          { type: "text/plain" }
+        );
+        triggerDownload(blob, "Archivoconerrores.xls");
+        showToast("Descargando Archivoconerrores.xls");
+      });
+    }, 2000);
   }
 
   /* ---------- Validación ---------- */
@@ -768,6 +1095,8 @@
 
   function resetDetail() {
     activeOptionId = null;
+    MZ.state.form = "";
+    MZ.state.variant = "";
     markActiveOption(null);
     detailContent.hidden = true;
     detailBody.innerHTML = "";
@@ -794,6 +1123,7 @@
       welcomePanel.style.display = "";
       detailSub.hidden = false;
       resetDetail();
+      MZ.screen("crear-solicitud", "Crear solicitud");
     }
   }
 
@@ -906,6 +1236,12 @@
 
     const empty = total === 0;
 
+    // Maze: estado de la pantalla → slug (vacío / filtrado / paginado)
+    const mzPath = empty
+      ? "consultar-estado/sin-solicitudes"
+      : (chips.length ? "consultar-estado/filtrado" : "consultar-estado") + (consultaState.page > 1 ? "/pagina-" + consultaState.page : "");
+    MZ.screen(mzPath, empty ? "Consultar estado · Sin solicitudes" : "Consultar estado");
+
     consultaHost.innerHTML = `
       <div class="consulta">
         <div class="consulta__head">
@@ -940,7 +1276,7 @@
               <button class="icon-btn icon-btn--sm" id="downloadToggle" aria-label="Descargar" aria-haspopup="true" aria-expanded="false">
                 <svg viewBox="0 0 24 24" width="20" height="20"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
               </button>
-              <div class="dropdown__panel download-panel" role="menu">
+              <div class="dropdown__panel download-panel" role="menu" data-mz-scope="menu-descargar">
                 <button class="dropdown__item" data-download="CSV" role="menuitem">Descargar CSV</button>
                 <button class="dropdown__item" data-download="XLSX" role="menuitem">Descargar XLSX</button>
               </div>
@@ -1046,6 +1382,7 @@
       closeAllDropdowns();
       dd.classList.toggle("open", open);
       ddBtn.setAttribute("aria-expanded", String(open));
+      if (open) MZ.sub("menu-descargar", "Menú descargar");
     });
     dd.querySelector(".dropdown__panel").addEventListener("click", (e) => e.stopPropagation());
     $$("[data-download]", consultaHost).forEach(b =>
@@ -1084,6 +1421,12 @@
     // Reutilizamos el contenedor del modal con un layout propio
     modal.classList.add("modal--filters");
     modal.hidden = false;
+    // Maze: el popup de filtros es una pantalla propia
+    modal.dataset.mzScope = "popup-filtros";
+    modalDialog.id = "mz-popup-filtros";
+    modalDialog.setAttribute("data-maze", "popup__filtros");
+    modalDialog.setAttribute("data-maze-type", "popup");
+    MZ.sub("filtros", "Filtros");
     const dialog = modalDialog;
     dialog.innerHTML = `
       <div class="filters">
@@ -1124,6 +1467,7 @@
 
     // Cerrar el popup de filtros y dejar el diálogo listo para los modales estándar
     const close = () => {
+      MZ.back();
       modal.hidden = true;
       modal.classList.remove("modal--filters");
       dialog.className = "modal__dialog";
@@ -1307,11 +1651,17 @@
 
     drawer.hidden = false;
     requestAnimationFrame(() => drawer.classList.add("is-open"));
+    // Maze: detalle de ticket con su estado (sin/con solución + ANS)
+    MZ.overlay(
+      "consultar-estado/ticket/" + MZ.slug(t.ticket) + "/" + (resuelto ? "con-solucion" : "sin-solucion") + "/ans-" + MZ.slug(t.ans),
+      "Detalle ticket " + t.ticket
+    );
   }
 
   function closeDrawer() {
     drawer.classList.remove("is-open");
     setTimeout(() => { drawer.hidden = true; }, 260);
+    MZ.back();
   }
   drawerOverlay.addEventListener("click", closeDrawer);
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !drawer.hidden) closeDrawer(); });
@@ -1372,6 +1722,13 @@
     });
 
     noResults.hidden = !q || anyVisible;
+
+    // Maze: estados del buscador (vacío / con resultados / sin resultados)
+    if (!activeOptionId) {
+      if (!q) MZ.screen("crear-solicitud", "Crear solicitud");
+      else if (anyVisible) MZ.screen("crear-solicitud/busqueda/con-resultados", "Búsqueda con resultados");
+      else MZ.screen("crear-solicitud/busqueda/sin-resultados", "Búsqueda sin resultados");
+    }
   }
 
   searchInput.addEventListener("input", runSearch);
@@ -1385,16 +1742,110 @@
   const showPanelBtn = $("#showPanelBtn");
   const welcomePanel = $("#welcomePanel");
 
+  // Muestra u oculta el panel de selección (lo usan los botones y el historial del navegador)
+  function setPanelHidden(hide) {
+    welcomePanel.style.display = hide ? "none" : "";
+    showPanelBtn.hidden = !hide;
+    solutionGrid.classList.toggle("panel-hidden", hide);
+  }
   hidePanelBtn.addEventListener("click", () => {
-    welcomePanel.style.display = "none";
-    showPanelBtn.hidden = false;
-    solutionGrid.classList.add("panel-hidden");
+    setPanelHidden(true);
+    MZ.sub("panel-oculto", "Panel de selección oculto");
   });
   showPanelBtn.addEventListener("click", () => {
-    welcomePanel.style.display = "";
-    showPanelBtn.hidden = true;
-    solutionGrid.classList.remove("panel-hidden");
+    setPanelHidden(false);
+    MZ.back();
   });
+
+  /* ============================================================
+     NAVEGACIÓN POR HISTORIAL (botón Atrás / Adelante / enlaces #/slug)
+     Restaura la pantalla, el formulario y su variante a partir del slug.
+     Se ejecuta en modo "silencioso": la UI cambia sin reescribir la URL
+     y, al final, la URL se reconcilia con lo que realmente se muestra.
+     Límite: los datos ya escritos en un formulario no se conservan al
+     volver con Atrás (el formulario se vuelve a dibujar vacío).
+     ============================================================ */
+  function setNavActive(view) {
+    $$(".nav-subitem[data-view]").forEach((s) => s.classList.toggle("nav-subitem--active", s.dataset.view === view));
+  }
+
+  // Abre solo la categoría indicada (o ninguna) en el acordeón
+  function openCategoryBySlug(catSlug) {
+    let openId = null;
+    $$(".acc-item", accordion).forEach((i) => {
+      const on = !!catSlug && MZ.slug(i.dataset.catId) === catSlug;
+      i.classList.toggle("is-open", on);
+      i.querySelector(".acc-head").setAttribute("aria-expanded", String(on));
+      if (on) openId = i.dataset.catId;
+    });
+    activeCategoryId = openId;
+  }
+
+  function closeAllOverlays() {
+    if (!modal.hidden) closeModal(true);
+    if (!drawer.hidden) closeDrawer();
+    closeAllDropdowns();
+    $$(".timepop", detailBody).forEach((p) => { p.hidden = true; });
+    if (sidebar.classList.contains("is-open")) closeMobileSidebar();
+  }
+
+  function applyRoute(path) {
+    const seg = String(path || "").split("/").filter(Boolean);
+    MZ.beginRoute();
+    try {
+      closeAllOverlays();
+
+      /* ---------- Consultar estado ---------- */
+      if (seg[0] === "consultar-estado") {
+        const keep = seg.indexOf("filtrado") !== -1 || ["ticket", "filtros", "menu-descargar"].indexOf(seg[1]) !== -1;
+        const pg = seg.find((x) => /^pagina-\d+$/.test(x));
+        if (!keep) { consultaState.filters = null; consultaState.query = ""; }
+        if (pg) consultaState.page = parseInt(pg.slice(7), 10);
+        else if (["ticket", "filtros", "menu-descargar"].indexOf(seg[1]) === -1) consultaState.page = 1;
+
+        if (currentView !== "consultar") { setNavActive("consultar"); switchView("consultar"); }
+        else renderConsultar();
+
+        if (seg[1] === "ticket" && seg[2]) {
+          const t = TICKETS.find((x) => MZ.slug(x.ticket) === seg[2]);
+          if (t) openTicketDrawer(t.ticket);
+        } else if (seg[1] === "filtros") {
+          openFiltersModal();
+        }
+        return;
+      }
+
+      /* ---------- Crear solicitud (categorías y formularios) ---------- */
+      if (currentView === "consultar") { setNavActive("crear"); switchView("crear"); }
+      if (searchInput.value) { searchInput.value = ""; runSearch(); }
+
+      const cat = CATEGORIES.find((c) => MZ.slug(c.id) === seg[1]);
+      const opt = cat && cat.options.find((o) => MZ.slug(o.id) === seg[2]);
+
+      if (opt) {
+        // Formulario de una subcategoría (+ variante Unitaria/Masiva)
+        openCategoryBySlug(seg[1]);
+        if (activeOptionId !== opt.id) selectOption(cat.id, opt.id);
+        const sel = $("#f-novedad", detailBody);
+        if (sel) {
+          const want = ["unitaria", "masiva"].indexOf(seg[3]) !== -1 ? seg[3] : "";
+          if (MZ.slug(sel.value) !== want) {
+            const match = Array.from(sel.options).find((o) => MZ.slug(o.value) === want);
+            sel.value = match ? match.value : "";
+            sel.dispatchEvent(new Event("change"));
+          }
+        }
+      } else {
+        // Pantalla de categorías (con una categoría abierta o ninguna)
+        if (activeOptionId) { resetDetail(); }
+        openCategoryBySlug(seg[1] === "categoria" ? seg[2] : "");
+        MZ.screen(seg[1] === "categoria" && seg[2] ? "crear-solicitud/categoria/" + seg[2] : "crear-solicitud", "Crear solicitud");
+      }
+      setPanelHidden(seg.indexOf("panel-oculto") !== -1);
+    } finally {
+      MZ.endRoute();
+    }
+  }
 
   /* ============================================================
      INIT
@@ -1406,5 +1857,15 @@
     firstItem.classList.add("is-open");
     firstItem.querySelector(".acc-head").setAttribute("aria-expanded", "true");
     activeCategoryId = firstItem.dataset.catId;
+  }
+
+  // Maze: etiquetado automático + historial del navegador
+  MZ.init();
+  MZ.onNavigate(applyRoute);
+  if (/^#\/./.test(location.hash)) {
+    // Enlace directo a una pantalla (#/consultar-estado, #/crear-solicitud/...)
+    applyRoute(location.hash.replace(/^#\/?/, ""));
+  } else {
+    MZ.screen("crear-solicitud/categoria/" + MZ.slug(activeCategoryId || ""), "Crear solicitud", { replace: true });
   }
 })();

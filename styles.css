@@ -326,7 +326,8 @@ button { font-family: inherit; cursor: pointer; }
   padding: 20px;
   min-height: calc(100vh - var(--header-h) - 48px);
 }
-.solution-grid.panel-hidden { grid-template-columns: 1fr; }
+/* Panel oculto: barra delgada a la izquierda + detalle a la derecha */
+.solution-grid.panel-hidden { grid-template-columns: 40px 1fr; }
 
 /* ===================== WELCOME PANEL ===================== */
 .welcome-panel {
@@ -511,21 +512,31 @@ button { font-family: inherit; cursor: pointer; }
 }
 
 /* ===================== SHOW PANEL BUTTON ===================== */
+/* Barra vertical delgada que aparece al ocultar el panel de selección */
 .show-panel-btn {
-  align-self: start;
-  display: inline-flex;
+  align-self: stretch;          /* ocupa toda la altura de la columna */
+  display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 4px;
+  gap: 10px;
+  width: 40px;
+  padding: 14px 0;
   border: 1px solid var(--line);
   background: var(--white);
   color: var(--teal-700);
-  font-size: 13px;
-  font-weight: 600;
-  padding: 8px 12px;
-  border-radius: 10px;
+  border-radius: 12px;
 }
 .show-panel-btn[hidden] { display: none; }
 .show-panel-btn:hover { background: var(--teal-50); }
+.show-panel-btn svg { flex-shrink: 0; }
+.show-panel-btn__label {
+  writing-mode: vertical-rl;    /* texto en vertical */
+  transform: rotate(180deg);    /* se lee de abajo hacia arriba */
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: .3px;
+  white-space: nowrap;
+}
 
 /* ===================== DETAIL PANEL ===================== */
 .detail-panel {
@@ -1470,3 +1481,17 @@ button { font-family: inherit; cursor: pointer; }
   background: var(--white) !important;
 }
 .timepop__cancel:hover { background: #f2f4f4 !important; }
+
+/* ===================== ESCANEO IA (validando plantilla) ===================== */
+.spin { animation: spin 0.9s linear infinite; transform-origin: center; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.modal__link {
+  display: inline-block;
+  margin-top: 10px;
+  color: var(--teal-700);
+  font-weight: 600;
+  text-decoration: underline;
+  font-size: 13.5px;
+}
+.modal__link:hover { color: var(--teal-900); }

@@ -40,9 +40,18 @@
   <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="styles.css" />
 </head>
-<body>
+<body data-maze-screen="crear-solicitud" data-maze-overlay="" data-maze-view="crear" data-maze-form="" data-maze-variant="">
+  <!--
+    Marcadores dinámicos de Maze (los actualiza app.js en cada cambio de pantalla, formulario o popup):
+      data-maze-screen   → slug de la pantalla actual     (ej. crear-solicitud/operaciones/op-duplicidad)
+      data-maze-overlay  → popup / menú / drawer abierto  (ej. confirmar-envio, menu-perfil)
+      data-maze-view     → crear | consultar
+      data-maze-form     → id de la subcategoría con formulario abierto
+      data-maze-variant  → unitaria | masiva
+    Cada cambio también actualiza la URL (#/slug) y el <title>.
+  -->
   <!-- ===================== HEADER ===================== -->
-  <header class="app-header">
+  <header class="app-header" data-mz-scope="header">
     <div class="app-header__left">
       <button class="icon-btn hamburger" id="menuToggle" aria-label="Abrir menú" aria-expanded="false">
         <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
@@ -70,7 +79,7 @@
           </svg>
           <span class="notif-dot" id="notifDot"></span>
         </button>
-        <div class="dropdown__panel notif-panel" role="menu">
+        <div class="dropdown__panel notif-panel" role="menu" data-mz-scope="menu-notificaciones">
           <div class="dropdown__header">
             <span>Notificaciones</span>
             <button class="link-btn" id="markAllRead">Marcar como leídas</button>
@@ -105,7 +114,7 @@
             <path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
         </button>
-        <div class="dropdown__panel profile-panel" role="menu">
+        <div class="dropdown__panel profile-panel" role="menu" data-mz-scope="menu-perfil">
           <div class="profile-card">
             <span class="profile-card__name">Ana Buriticá</span>
             <span class="profile-card__email">ana.buritica@credibanco.com</span>
@@ -124,7 +133,7 @@
     <div class="overlay" id="overlay" hidden></div>
 
     <!-- ===================== SIDEBAR ===================== -->
-    <aside class="sidebar" id="sidebar" aria-label="Navegación principal">
+    <aside class="sidebar" id="sidebar" aria-label="Navegación principal" data-mz-scope="menu-lateral">
       <nav class="nav">
         <!-- Transacciones (expandible) -->
         <div class="nav-group" data-group>
@@ -216,9 +225,9 @@
 
     <!-- ===================== MAIN ===================== -->
     <main class="main">
-      <div class="solution-grid" id="solutionGrid">
+      <div class="solution-grid" id="solutionGrid" data-maze-state="seleccion">
         <!-- Panel de bienvenida / navegación de categorías -->
-        <section class="welcome-panel" id="welcomePanel">
+        <section class="welcome-panel" id="welcomePanel" data-mz-scope="categorias">
           <div class="welcome-hero">
             <span class="welcome-hero__blob welcome-hero__blob--dark"></span>
             <span class="welcome-hero__blob welcome-hero__blob--orange"></span>
@@ -249,15 +258,15 @@
         </section>
 
         <!-- Botón para mostrar el panel cuando está oculto -->
-        <button class="show-panel-btn" id="showPanelBtn" hidden>
+        <button class="show-panel-btn" id="showPanelBtn" hidden aria-label="Mostrar selección">
           <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
             <path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
-          Mostrar panel
+          <span class="show-panel-btn__label">Mostrar Selección</span>
         </button>
 
         <!-- Panel de detalle / estado vacío -->
-        <section class="detail-panel" id="detailPanel">
+        <section class="detail-panel" id="detailPanel" data-mz-scope="panel-detalle">
           <div class="empty-state" id="emptyState">
             <div class="empty-illustration" aria-hidden="true">
               <span class="empty-illustration__dot empty-illustration__dot--left"></span>
@@ -296,13 +305,13 @@
         </section>
 
         <!-- Submódulo Consultar estado (ocupa todo el ancho) -->
-        <section class="consulta-host" id="consultaHost" hidden></section>
+        <section class="consulta-host" id="consultaHost" data-mz-scope="consultar-estado" hidden></section>
       </div>
     </main>
   </div>
 
   <!-- Modal de confirmación / resultado -->
-  <div class="modal" id="modal" hidden>
+  <div class="modal" id="modal" data-mz-scope="popup" hidden>
     <div class="modal__overlay" data-modal-overlay></div>
     <div class="modal__dialog" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
       <div class="modal__icon" id="modalIcon"></div>
@@ -313,7 +322,7 @@
   </div>
 
   <!-- Drawer de detalle del ticket (panel lateral derecho) -->
-  <div class="drawer" id="ticketDrawer" hidden>
+  <div class="drawer" id="ticketDrawer" data-mz-scope="ticket-detalle" hidden>
     <div class="drawer__overlay" id="drawerOverlay"></div>
     <aside class="drawer__panel" role="dialog" aria-modal="true" aria-label="Detalle del ticket" id="drawerPanel"></aside>
   </div>
